@@ -1,0 +1,16 @@
+[package]
+name = "forward_goto"
+version = "0.1.0"
+authors = ["SrTobi <code.databyte@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[dependencies.syn]
+version = "1.0"
+features = ["full"]
