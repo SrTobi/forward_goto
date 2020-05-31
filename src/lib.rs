@@ -119,7 +119,7 @@ fn traverse_boxed_block(boxed: &mut Box<syn::Block>, collector: &mut Collector) 
 
 fn traverse_stmts(stmts: &mut Vec<Stmt>, collector: &mut Collector) {
     let mut i = 0;
-    while i < stmts.len()  {
+    while i < stmts.len() {
         println!("start stmt");
         {
             let stmt = stmts.get_mut(i).unwrap();
@@ -127,53 +127,50 @@ fn traverse_stmts(stmts: &mut Vec<Stmt>, collector: &mut Collector) {
             traverse_stmt(stmt, &mut collector);
         }
 
-        if let Some((end_label, continuations)) = collector.retrieve_continuations() {
-            println!("build goto");
+        if let Some((start_index, end_label, continuations)) = collector.retrieve_continuations() {
+            println!("build goto {}", i);
             let rest = stmts.split_off(i + 1);
 
-            let mut inner: Option<Vec<Stmt>> = None;
+            i = start_index;
+            let mut inner = stmts.split_off(start_index);
+            inner.push(new_break_stmt(end_label.clone()));
 
-            for (start_index, begin, continuation, end) in continuations {
-                inner = Some(
-                    match start_index {
-                        Some(start_index) => {
-                            i = min(i, start_index);
-                            let mut inside_stmts = stmts.split_off(start_index);
-                            inside_stmts.extend(inner.take().into_iter().flatten());
-                            inside_stmts.push(expr_to_stmt(new_break_expr(end.clone())));
-                            let mut result = if begin == end {
-                                assert!(continuation.is_empty());
-                                inside_stmts
-                            } else {
-                                let mut result = vec![new_loop_block(begin, inside_stmts)];
-                                result.extend(continuation);
-                                result.push(expr_to_stmt(new_break_expr(end)));
-                                result
-                            };
-                            result
-                        },
-                        None => {
-                            let inner = inner.unwrap();
-                            let mut result = vec![new_loop_block(begin, inner)];
-                            result.extend(continuation);
-                            result.push(expr_to_stmt(new_break_expr(end)));
-                            result
-                        },
+            for (start_index, incomings, continuation, outgoing) in continuations {
+                inner = {
+                    let mut inside_stmts = if i == start_index {
+                        inner
+                    } else {
+                        debug_assert!(start_index < i);
+                        i = start_index;
+                        let mut inside_stmts = stmts.split_off(start_index);
+                        inside_stmts.extend(inner.into_iter());
+                        inside_stmts
+                    };
+
+                    if let Some(last) = incomings.last().cloned() {
+                        for (idx, incoming) in incomings.into_iter().enumerate() {
+                            inside_stmts.push(new_break_stmt(last.clone()));
+                            inside_stmts = vec![new_loop_block(incoming, inside_stmts)];
+                        }
                     }
-                )
+
+                    inside_stmts.extend(continuation);
+                    inside_stmts.push(new_break_stmt(outgoing));
+                    inside_stmts
+                }
             }
-            println!("finished build goto");
-            let inner = inner.expect("Expected that at least one loop was built");
             stmts.push(new_loop_block(end_label, inner));
             stmts.extend(rest);
+            println!("finished build goto {} in {}", i, stmts.len());
             continue;
         }
+
 
         if collector.should_push_continuation() {
             let continuation = stmts.split_off(i + 1);
             println!("push continuation {}", continuation.len());
             let target = collector.push_continuation(continuation);
-            //stmts.push(expr_to_stmt(new_break_expr(target)));
+            stmts.push(expr_to_stmt(new_break_expr(target)));
             println!("pushed continuation");
             return;
         }
@@ -250,6 +247,10 @@ fn traverse_expr(expr: &mut Expr, collector: &mut Collector, is_statement: bool)
     if let Some(replacement) = replacement_expr {
         *expr = replacement;
     }
+}
+
+fn new_break_stmt(lifetime: Lifetime) -> Stmt {
+    expr_to_stmt(new_break_expr(lifetime))
 }
 
 fn expr_to_stmt(expr: Expr) -> Stmt {

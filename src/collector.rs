@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use syn::*;
-use std::cmp::{min, min_by_key};
+use std::cmp::{min, max, min_by_key};
 use std::collections::{HashMap, HashSet, VecDeque, binary_heap::BinaryHeap};
+use fix_fn::fix_fn;
 
 pub type Level = u32;
 
+type ContinuationMap = HashMap<Lifetime, (Vec<Stmt>, Vec<Lifetime>)>;
 
 pub struct Collector {
     next_lifetime_id: u32,
@@ -13,8 +15,8 @@ pub struct Collector {
     index: usize,
     gotos: HashMap<Lifetime, (Level, usize)>,
     labels: HashSet<Lifetime>,
-    current_continuation_label: Option<Lifetime>,
-    continuations: HashMap<Lifetime, (Vec<Stmt>, Option<Lifetime>)>
+    continuations: ContinuationMap,
+    prev_conts: Vec<Lifetime>,
 }
 
 impl Collector {
@@ -26,12 +28,12 @@ impl Collector {
             gotos: HashMap::new(),
             labels: HashSet::new(),
             index: usize::max_value(),
-            current_continuation_label: None,
             continuations: HashMap::new(),
+            prev_conts: Vec::new(),
         }
     }
 
-    pub fn new_lifetime(&mut self) -> Lifetime {
+    fn new_lifetime(&mut self) -> Lifetime {
         let name = format!("_continuation{}", self.next_lifetime_id);
         self.next_lifetime_id += 1;
         Lifetime {
@@ -49,19 +51,20 @@ impl Collector {
 
     pub fn add_label(&mut self, lifetime: Lifetime) {
         assert!(!self.labels.contains(&lifetime));
+        debug_assert!(self.prev_conts.is_empty());
         self.labels.insert(lifetime.clone());
-        self.current_continuation_label = Some(lifetime);
+        self.prev_conts.push(lifetime);
         self.continuation_level = self.level;
     }
 
     pub fn cut(&mut self) -> CollectorCut<'_> {
         let labels = std::mem::replace(&mut self.labels, HashSet::new());
-        let current_continuation_label = std::mem::replace(&mut self.current_continuation_label, None);
+        let prev_conts = std::mem::replace(&mut self.prev_conts, Vec::new());
         let continuations = std::mem::replace(&mut self.continuations, HashMap::new());
         CollectorCut {
             collector: self,
             labels,
-            current_continuation_label,
+            prev_conts,
             continuations,
         }
     }
@@ -75,13 +78,15 @@ impl Collector {
         self.level += 1;
         self.index = index;
 
+        let prev_conts = std::mem::replace(&mut self.prev_conts, Vec::new());
         CollectorEnter {
             collector: self,
             prev_index,
+            prev_conts,
         }
     }
 
-    fn leave_statement(&mut self, prev_index: usize) {
+    fn leave_statement(&mut self, prev_index: usize, continuations: Vec<Lifetime>) {
         assert!(self.level > 0);
         self.level -= 1;
         self.continuation_level = min(self.continuation_level, self.level);
@@ -91,6 +96,7 @@ impl Collector {
         }
 
         self.index = prev_index;
+        self.prev_conts.extend(continuations);
     }
 
     #[must_use]
@@ -100,46 +106,21 @@ impl Collector {
 
     #[must_use]
     pub fn push_continuation(&mut self, continuation: Vec<Stmt>) -> Lifetime {
-        let current_continuation_label = match self.current_continuation_label.take() {
-            Some(label) => label,
-            None => {
-                let lifetime = self.new_lifetime();
+        assert!(!self.prev_conts.is_empty());
+        
+        let lifetime = self.new_lifetime();
 
-                for (_, (_, to)) in &mut self.continuations.iter_mut() {
-                    *to = Some(lifetime.clone());
-                }
-    
-                lifetime
-            },
-        };
-        self.continuations.insert(current_continuation_label.clone(), (continuation, None));
-        current_continuation_label
+        let previous_continuations = std::mem::replace(
+            &mut self.prev_conts,
+            vec![lifetime.clone()],
+        );
+
+        self.continuations.insert(lifetime.clone(), (continuation, previous_continuations));
+        lifetime
     }
 
     #[must_use]
-    pub fn retrieve_continuations(&mut self) -> Option<(Lifetime, Vec<(Option<usize>, Lifetime, Vec<Stmt>, Lifetime)>)> {
-        #[derive(Eq)]
-        struct Cont {
-            index: usize,
-            label: Lifetime,
-        };
-        impl PartialEq for Cont {
-            fn eq(&self, rhs: &Self) -> bool {
-                self.index == rhs.index
-            }
-        }
-        impl Ord for Cont {
-            fn cmp(&self, other: &Cont) -> Ordering {
-                self.index.cmp(&other.index).reverse()
-            }
-        }
-        impl PartialOrd for Cont {
-            fn partial_cmp(&self, other: &Cont) -> Option<Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-        
-
+    pub fn retrieve_continuations(&mut self) -> Option<(usize, Lifetime, Vec<(usize, Vec<Lifetime>, Vec<Stmt>, Lifetime)>)> {
         let labels_to_generate: Vec<Lifetime> = self.labels
             .iter()
             .filter(|l| self.gotos.get(&l).iter().any(|(lvl, _)| *lvl == self.level))
@@ -149,21 +130,75 @@ impl Collector {
         if labels_to_generate.is_empty() {
             return None
         }
-        
-        let mut queue = BinaryHeap::new();
+
+
+        let mut gotos_to_generate: HashMap<Lifetime, usize> = HashMap::new();
+        let mut largest_index = 0;
+        let mut smallest_index = usize::MAX;
+
         for label in labels_to_generate {
             self.labels.remove(&label);
-            queue.push(
-                Cont {
-                    index: self.gotos.get(&label).expect("expected label to be in goto").1,
-                    label: label
-                }
-            )
+            let (_, index) = self.gotos.remove(&label).expect("'label' should be in self.goto");
+            gotos_to_generate.insert(label, index);
+            largest_index = max(largest_index, index);
+            smallest_index = min(smallest_index, index);
         }
 
-        let end_label = self.current_continuation_label.take().unwrap_or_else(|| self.new_lifetime());
+
+        for (_, (lvl, index)) in &mut self.gotos.iter_mut() {
+            if *lvl == self.level {
+                *index = min(*index, smallest_index);
+            }
+        }
+
+        debug_assert!(!self.prev_conts.is_empty());
+        if self.prev_conts.len() > 1 {
+            self.push_continuation(Vec::new());
+        }
+        debug_assert!(self.prev_conts.len() == 1);
+        let end_label = self.prev_conts.drain(..).next().unwrap();
         
-        let to_generate = {
+        let continuations = &self.continuations;
+        let rec = fix_fn!(
+            |rec, cur: &Lifetime, index: usize, result: &mut Vec<(usize, Lifetime)>| -> bool {
+                let index = *gotos_to_generate.get(cur).unwrap_or(&index);
+                match continuations.get(cur) {
+                    Some((_, prevs)) => {
+                        let mut found_unrelated_label = false;
+                        for p in prevs {
+                             found_unrelated_label |= rec(p, index, result);
+                        }
+
+                        if !found_unrelated_label {
+                            result.push((index, cur.clone()));
+                        }
+
+                        found_unrelated_label
+                    },
+                    None => {
+                        false
+                    }
+                }
+            }
+        );
+
+        let sorted_conts_to_generate = {
+            let mut conts_to_generate = Vec::new();
+            rec(&end_label, largest_index, &mut conts_to_generate);
+            conts_to_generate.sort_by_key(|e| usize::MAX - e.0);
+            conts_to_generate
+        };
+
+        let mut result = Vec::new();
+
+        for (index, label) in sorted_conts_to_generate {
+            let (stmts, prevs) = self.continuations.remove(&label).unwrap();
+            result.push((index, prevs, stmts, label));
+        }
+
+        Some((largest_index, end_label, result))
+
+        /*let to_generate = {
             assert!(self.labels.is_empty());
 
             let mut to_generate = Vec::new();
@@ -202,7 +237,8 @@ impl Collector {
             (index, start, stmts, maybe_end.unwrap_or(end_label.clone()))
         }).collect();
 
-        Some((end_label, result_conts))
+        Some((end_label, result_conts))*/
+        //todo!()
     }
 }
 
@@ -211,18 +247,20 @@ impl Drop for Collector{
         assert!(self.gotos.is_empty());
         assert!(self.continuations.is_empty());
         assert!(self.labels.is_empty());
-        assert!(self.current_continuation_label.is_none());
+        assert!(self.prev_conts.is_empty());
     }
 }
 
 pub struct CollectorEnter<'t> {
     collector: &'t mut Collector,
     prev_index: usize,
+    prev_conts: Vec<Lifetime>,
 }
 
 impl<'t> Drop for CollectorEnter<'t> {
     fn drop(&mut self) {
-        Collector::leave_statement(self.collector, self.prev_index);
+        let continuations = std::mem::replace(&mut self.prev_conts, Default::default());
+        Collector::leave_statement(self.collector, self.prev_index, continuations);
     }
 }
 
@@ -244,17 +282,17 @@ pub struct CollectorCut<'t> {
     collector: &'t mut Collector,
 
     labels: HashSet<Lifetime>,
-    current_continuation_label: Option<Lifetime>,
-    continuations: HashMap<Lifetime, (Vec<Stmt>, Option<Lifetime>)>,
+    prev_conts: Vec<Lifetime>,
+    continuations: HashMap<Lifetime, (Vec<Stmt>, Vec<Lifetime>)>,
 }
 
 impl<'t> Drop for CollectorCut<'t> {
     fn drop(&mut self) {
         assert!(self.collector.labels.is_empty());
-        assert!(self.collector.current_continuation_label.is_none());
+        assert!(self.collector.prev_conts.is_empty());
         assert!(self.collector.continuations.is_empty());
         self.collector.labels = std::mem::replace(&mut self.labels, Default::default());
-        self.collector.current_continuation_label = std::mem::replace(&mut self.current_continuation_label, Default::default());
+        self.collector.prev_conts = std::mem::replace(&mut self.prev_conts, Default::default());
         self.collector.continuations = std::mem::replace(&mut self.continuations, Default::default());
     }
 }

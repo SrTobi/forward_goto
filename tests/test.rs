@@ -1,10 +1,8 @@
-#[macro_use]
-extern crate forward_goto;
-
+use forward_goto::*;
 
 
 #[rewrite_forward_goto]
-#[allow(unreachable_code)]
+//#[allow(unreachable_code)]
 fn test_easy_method() -> Vec<&'static str>{
     let mut result = vec!["begin"];
 
@@ -27,7 +25,6 @@ fn test_easy() {
         ]
     );
 }
-
 
 
 #[rewrite_forward_goto]
@@ -63,7 +60,7 @@ fn test_if() {
     );
 }
 
-
+#[derive(Eq, PartialEq)]
 enum Three {
     A, B, C
 }
@@ -296,6 +293,180 @@ fn test_jump_into_double_if() {
             "begin",
             "in between",
             "alternative",
+            "end",
+        ]
+    );
+}
+
+
+
+
+#[rewrite_forward_goto]
+fn test_multi_goto_method(three: Three) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if three == Three::A {
+        result.push("before first goto");
+        forward_goto!('test);
+    }
+
+    if three == Three::B {
+        result.push("before second goto");
+        forward_goto!('test);
+    }
+
+    result.push("in between");
+
+    forward_label!('test);
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_multi_goto() {
+    assert_eq!(test_multi_goto_method(Three::A),
+        vec![
+            "begin",
+            "before first goto",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_goto_method(Three::B),
+        vec![
+            "begin",
+            "before second goto",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_goto_method(Three::C),
+        vec![
+            "begin",
+            "in between",
+            "end",
+        ]
+    );
+}
+
+
+
+#[rewrite_forward_goto]
+fn test_multi_cross_method(three: Three) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if three == Three::A {
+        result.push("before first goto");
+        forward_goto!('test);
+    }
+
+    if three == Three::B {
+        result.push("before second goto");
+        forward_goto!('test_2);
+    }
+
+    result.push("after ifs");
+
+    forward_label!('test);
+
+    result.push("in between labels");
+
+    forward_label!('test_2);
+
+    result.push("end");
+    result
+}
+
+
+#[test]
+fn test_multi_cross() {
+    assert_eq!(test_multi_cross_method(Three::A),
+        vec![
+            "begin",
+            "before first goto",
+            "in between labels",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_cross_method(Three::B),
+        vec![
+            "begin",
+            "before second goto",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_cross_method(Three::C),
+        vec![
+            "begin",
+            "after ifs",
+            "in between labels",
+            "end",
+        ]
+    );
+}
+
+
+#[rewrite_forward_goto]
+fn test_multi_stack_like_method(three: Three) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if three == Three::A {
+        result.push("before first goto");
+        forward_goto!('test);
+    }
+    
+    fn f() {}
+
+    if three == Three::B {
+        result.push("before second goto");
+        forward_goto!('test_2);
+    }
+
+    f();
+
+    result.push("after ifs");
+
+    forward_label!('test_2);
+
+    f();
+
+    result.push("in between labels");
+
+    forward_label!('test);
+
+
+    result.push("end");
+    result
+}
+
+
+#[test]
+fn test_multi_stack_like() {
+    assert_eq!(test_multi_stack_like_method(Three::A),
+        vec![
+            "begin",
+            "before first goto",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_stack_like_method(Three::B),
+        vec![
+            "begin",
+            "before second goto",
+            "in between labels",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_multi_stack_like_method(Three::C),
+        vec![
+            "begin",
+            "after ifs",
+            "in between labels",
             "end",
         ]
     );
