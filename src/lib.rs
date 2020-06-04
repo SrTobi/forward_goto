@@ -33,8 +33,6 @@
 //! }
 //! ```
 
-#![feature(cmp_min_max_by)]
-
 extern crate proc_macro;
 extern crate proc_macro2;
 

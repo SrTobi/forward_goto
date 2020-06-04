@@ -1,5 +1,5 @@
 use syn::*;
-use std::cmp::{min, max, min_by_key};
+use std::cmp::{min, max};
 use std::collections::{HashMap, HashSet};
 use fix_fn::fix_fn;
 use super::result::{ErrInfo, Result, err};
@@ -103,7 +103,9 @@ impl Collector {
         self.continuation_level = min(self.continuation_level, self.level);
 
         for (_, p) in &mut self.gotos.iter_mut() {
-            *p = min_by_key(*p, (self.level, self.index), |p| p.0);
+            if self.level < p.0 {
+                *p = (self.level, self.index);
+            }
         }
 
         self.index = prev_index;
