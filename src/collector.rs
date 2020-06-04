@@ -1,15 +1,16 @@
-use std::cmp::Ordering;
 use syn::*;
 use std::cmp::{min, max, min_by_key};
-use std::collections::{HashMap, HashSet, VecDeque, binary_heap::BinaryHeap};
+use std::collections::{HashMap, HashSet};
 use fix_fn::fix_fn;
+use super::result::{ErrInfo, Result, err};
+use syn::spanned::Spanned;
 
 pub type Level = u32;
 
 type ContinuationMap = HashMap<Lifetime, (Vec<Stmt>, Vec<Lifetime>)>;
 
 pub struct Collector {
-    next_lifetime_id: u32,
+    next_label_id: u32,
     level: Level,
     continuation_level: Level,
     index: usize,
@@ -17,12 +18,13 @@ pub struct Collector {
     labels: HashSet<Lifetime>,
     continuations: ContinuationMap,
     prev_conts: Vec<Lifetime>,
+    errors: Vec<(ErrInfo, u32)>,
 }
 
 impl Collector {
     pub fn new() -> Self {
         Self {
-            next_lifetime_id: 0,
+            next_label_id: 0,
             level: 0,
             continuation_level: 0,
             gotos: HashMap::new(),
@@ -30,31 +32,40 @@ impl Collector {
             index: usize::max_value(),
             continuations: HashMap::new(),
             prev_conts: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
     fn new_lifetime(&mut self) -> Lifetime {
-        let name = format!("_continuation{}", self.next_lifetime_id);
-        self.next_lifetime_id += 1;
+        let name = format!("_continuation{}", self.next_label_id);
+        self.next_label_id += 1;
         Lifetime {
             apostrophe: proc_macro2::Span::call_site(),
             ident: Ident::new(&name, proc_macro2::Span::call_site()),
         }
     }
 
-    pub fn add_goto(&mut self, lifetime: Lifetime) {
+    pub fn add_goto(&mut self, label: Lifetime) {
         assert!(self.index < usize::max_value());
-        if !self.gotos.contains_key(&lifetime) {
-            self.gotos.insert(lifetime, (self.level, self.index));
+        if !self.gotos.contains_key(&label) {
+            self.gotos.insert(label, (self.level, self.index));
         }
     }
 
-    pub fn add_label(&mut self, lifetime: Lifetime) {
-        assert!(!self.labels.contains(&lifetime));
+    pub fn add_label(&mut self, label: Lifetime) -> Result<()> {
+        if !self.gotos.contains_key(&label) {
+            return err(label, "Found no goto to this label!")
+        }
+        if self.labels.contains(&label) {
+            return err(label, "Label already used")
+        }
+
         debug_assert!(self.prev_conts.is_empty());
-        self.labels.insert(lifetime.clone());
-        self.prev_conts.push(lifetime);
+        self.labels.insert(label.clone());
+        self.prev_conts.push(label);
         self.continuation_level = self.level;
+
+        Ok(())
     }
 
     pub fn cut(&mut self) -> CollectorCut<'_> {
@@ -104,7 +115,6 @@ impl Collector {
         !self.labels.is_empty() && self.continuation_level >= self.level
     }
 
-    #[must_use]
     pub fn push_continuation(&mut self, continuation: Vec<Stmt>) -> Lifetime {
         assert!(!self.prev_conts.is_empty());
         let incoming_label = self.prev_conts[0].clone();
@@ -113,19 +123,19 @@ impl Collector {
             return incoming_label;
         }
         
-        let newOutLabel = self.new_lifetime();
+        let out_label = self.new_lifetime();
 
         let previous_continuations = std::mem::replace(
             &mut self.prev_conts,
-            vec![newOutLabel.clone()],
+            vec![out_label.clone()],
         );
-        print!("{} -> ", &newOutLabel);
-        for p in previous_continuations.iter() {
-            print!("{}", p);
-        }
-        println!();
+        //eprint!("{} -> ", &out_label);
+        //for p in previous_continuations.iter() {
+        //    eprint!("{}", p);
+        //}
+        //eprintln!();
 
-        self.continuations.insert(newOutLabel, (continuation, previous_continuations));
+        self.continuations.insert(out_label, (continuation, previous_continuations));
         incoming_label
     }
 
@@ -171,7 +181,7 @@ impl Collector {
         let continuations = &self.continuations;
         let rec = fix_fn!(
             |rec, cur: &Lifetime, index: usize, result: &mut Vec<(usize, Lifetime)>| -> bool {
-                let index = *gotos_to_generate.get(cur).unwrap_or(&index);
+                //let index = *gotos_to_generate.get(cur).unwrap_or(&index);
                 match continuations.get(cur) {
                     Some((_, prevs)) => {
                         let mut found_unrelated_label = false;
@@ -194,7 +204,7 @@ impl Collector {
 
         let sorted_conts_to_generate = {
             let mut conts_to_generate = Vec::new();
-            rec(&end_label, largest_index, &mut conts_to_generate);
+            rec(&end_label, smallest_index, &mut conts_to_generate);
             conts_to_generate.sort_by_key(|e| usize::MAX - e.0);
             conts_to_generate
         };
@@ -208,14 +218,39 @@ impl Collector {
 
         Some((largest_index, end_label, result))
     }
+
+    pub fn check(mut self) -> Result<()> {
+        for (goto, _) in self.gotos.drain() {
+            if !self.labels.contains(&goto) {
+                self.errors.push(((goto.span(), "Could not find target label!".into()), 1));
+            }
+        }
+
+        for label in self.labels.drain() {
+            self.errors.push(((label.span(), "Found no goto to this label!".into()), 0));
+        }
+
+        let mut errors = std::mem::replace(&mut self.errors, Vec::new());
+        errors.sort_by_key(|(_, p)| *p);
+
+        for ((_, e), _) in errors.iter() {
+            eprintln!("Err: {}", e);
+        }
+
+        errors.first().map_or(Ok(()), |(info, _)| Err(info.clone()))
+    }
+
+    pub fn add_error(&mut self, span: impl Spanned, msg: impl Into<String>) {
+        self.errors.push(((span.span(), msg.into()), 5));
+    }
 }
 
-impl Drop for Collector{
+impl Drop for Collector {
     fn drop(&mut self) {
-        assert!(self.gotos.is_empty());
-        assert!(self.continuations.is_empty());
         assert!(self.labels.is_empty());
-        assert!(self.prev_conts.is_empty());
+        assert!(self.gotos.is_empty());
+        self.continuations.clear();
+        self.prev_conts.clear();
     }
 }
 
@@ -256,12 +291,15 @@ pub struct CollectorCut<'t> {
 
 impl<'t> Drop for CollectorCut<'t> {
     fn drop(&mut self) {
-        assert!(self.collector.labels.is_empty());
-        assert!(self.collector.prev_conts.is_empty());
-        assert!(self.collector.continuations.is_empty());
-        self.collector.labels = std::mem::replace(&mut self.labels, Default::default());
-        self.collector.prev_conts = std::mem::replace(&mut self.prev_conts, Default::default());
-        self.collector.continuations = std::mem::replace(&mut self.continuations, Default::default());
+        let collector = &mut self.collector;
+
+        for label in collector.labels.drain() {
+            collector.errors.push(((label.span(), "Found no goto to this label! Note that gotos cannot jump into expressions that need to provide a result value.".into()), 0));
+        }
+
+        collector.labels = std::mem::replace(&mut self.labels, Default::default());
+        collector.prev_conts = std::mem::replace(&mut self.prev_conts, Default::default());
+        collector.continuations = std::mem::replace(&mut self.continuations, Default::default());
     }
 }
 

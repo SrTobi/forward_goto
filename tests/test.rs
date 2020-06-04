@@ -640,3 +640,71 @@ fn test_jump_into_match() {
         ]
     );
 }
+
+
+
+#[rewrite_forward_goto]
+fn test_jump_from_match_method(three: Three) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if three == Three::B {
+        forward_goto!('b);
+    }
+
+    match three {
+        Three::A => {
+            forward_goto!('a);
+        },
+        Three::B => {
+            //forward_goto!('b);
+        },
+        Three::C => {
+            forward_goto!('c);
+        }
+    };
+
+    match 1 as i32 {
+        1 => {
+            forward_label!('a);
+            result.push("a");
+        },
+        2 => {
+            forward_label!('b);
+            result.push("b");
+        },
+        _ => {
+            forward_label!('c);
+            result.push("c");
+        },
+    };
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_jump_from_match() {
+    assert_eq!(test_jump_from_match_method(Three::A),
+        vec![
+            "begin",
+            "a",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_from_match_method(Three::B),
+        vec![
+            "begin",
+            "b",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_from_match_method(Three::C),
+        vec![
+            "begin",
+            "c",
+            "end",
+        ]
+    );
+}
