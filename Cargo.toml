@@ -3,6 +3,12 @@ name = "forward_goto"
 version = "0.1.0"
 authors = ["SrTobi <code.databyte@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "Crate bringing gotos to Rust."
+homepage = "https://crates.io/crates/forward_goto"
+repository = "https://github.com/SrTobi/forward_goto"
+readme = "readme.md"
+keywords = ["goto", "control-flow", "macro"]
 
 [lib]
 proc-macro = true
