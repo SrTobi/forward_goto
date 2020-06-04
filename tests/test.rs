@@ -777,3 +777,43 @@ fn test_inner_goto() {
         ]
     );
 }
+
+
+#[rewrite_forward_goto]
+fn test_side_jump_method(b: bool) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if b {
+        result.push("then");
+        forward_goto!('other_branch);
+    } else {
+        result.push("else");
+        forward_label!('other_branch);
+        result.push("after label");
+    }
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_side_jump() {
+    assert_eq!(test_side_jump_method(true),
+        vec![
+            "begin",
+            "then",
+            "after label",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_side_jump_method(false),
+        vec![
+            "begin",
+            "else",
+            "after label",
+            "end",
+        ]
+    );
+}
+

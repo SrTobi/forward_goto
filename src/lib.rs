@@ -1,3 +1,38 @@
+//! This crate provides a sound and safe way to jump from a goto forward
+//! in the control-flow to a label.
+//!
+//! Rust has no goto mechanism with which it is possible to arbitrarily
+//! jump through the control-flow.
+//! 
+//! This crates provides a procedural macro that allows to write gotos
+//! that can jump forward in the control-flow to a specified label.
+//! 
+//! The jump is safe in terms of the borrow-checker, but several
+//! restrictions apply. See [`rewrite_forward_goto`] for more information.
+//! 
+//! ```
+//! use forward_goto::rewrite_forward_goto;
+//! 
+//! #[rewrite_forward_goto]
+//! fn decode_msg(luck: impl Fn() -> bool, is_alan_turing: bool) {
+//!     if is_alan_turing {
+//!         forward_goto!('turing_complete);
+//!     }
+//! 
+//!     println!("You'll need a lot of luck for this");
+//!     
+//!     if luck() {
+//!         println!("Seems you were lucky");
+//! 
+//!         forward_label!('turing_complete);
+//!
+//!         println!("Message decoded!");
+//!     } else {
+//!         println!("No luck today...");
+//!     }
+//! }
+//! ```
+
 #![feature(cmp_min_max_by)]
 
 extern crate proc_macro;
@@ -9,8 +44,68 @@ mod collector;
 use collector::Collector;
 use quote::{quote, quote_spanned};
 use syn::*;
-use result::{Result, err};
+use result::{Result};
 
+
+/// This macro will rewrite the annotated function so that the control-flow
+/// will go from a goto `forward_goto!('label)` directly to a corresponding label
+/// `forward_label!('label)`.
+///
+/// This is achieved by wrapping necessary statements into `loops` and jump to
+/// their ends via `break`. Because of this implementation it is only possible to jump
+/// forward in the control-flow and not backwards. This, however, implies that
+/// all normal rust features — especially the borrow checker — work as expected.
+/// 
+/// For gotos and labels apply multiple restrictions:
+/// 1. Every goto has at most one corresponding label, but multiple gotos can go to
+///    the same label.
+/// 2. Only forward jumps are allowed, meaning that the goto must come before the label.
+///    in the code. Backward jumps are not allowed. 'Side jumps' 
+///    (i.e. from a then-branch into an else-branch) are possible,
+///    as long as the goto is physically before the label.
+/// 3. Any statement after a label in the control-flow may not be the result statement
+///    of a block until all current labels are rewired to their corresponding gotos.
+/// 
+/// ```ignore
+/// #[rewrite_forward_goto]
+/// fn test() -> i32 {
+///     forward_goto!('into_block);
+///     
+///     let result = {
+///         forward_label!('into_block);
+///         "the result" // <- error
+///     }
+/// 
+///     42 // would be allowed, because it's outside of 'into_block influence
+/// }
+/// ```
+///
+/// Because of they way the rewriting is done, it is only possible to use
+/// definitions that are reachable on all code paths.
+/// 
+/// ```
+/// # use forward_goto::rewrite_forward_goto;
+/// #[rewrite_forward_goto]
+/// fn test(b: bool) {
+///     fn f1() {}
+/// 
+///     if b {
+///         forward_goto!('jump);
+///     }
+/// 
+///     fn f2() {}
+///     
+///     {
+///         f2(); // f2 can be used here
+///         forward_label!('jump);
+///         f1();
+///         // f2 cannot be used here
+///     };
+/// 
+///     f1();
+/// }
+/// ``` 
+/// 
 #[proc_macro_attribute]
 pub fn rewrite_forward_goto(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut input = parse_macro_input!(item as ItemFn);
