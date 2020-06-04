@@ -13,92 +13,6 @@ use quote::ToTokens;
 use syn::*;
 
 
-/*
-
-
-    {
-        println!("before");
-        forward_goto!('test);
-
-        println!("inbetween");
-
-        forward_label('test);
-        println!("end");
-    }
-
-
-    {
-        println!("before");
-        'test: loop {
-            break 'test;
-
-            println!("inbetween");
-            break 'test;
-        }
-
-        println!("end");
-    }
-
-
-
-    {
-        println!("before");
-        if test1 {
-            forward_goto!('test);
-        }
-
-        println!("inbetween");
-
-        if test2 {
-            if test {
-                forward_label('test);
-                println!("after");
-            } else {
-                println!("alternative");
-            }
-            println!("together!");
-        }
-
-        println!("end");
-    }
-
-    {
-        println!("before");
-        loop 'outer: {
-            loop 'inner: {
-                loop 'test: {
-                    if test1 {
-                        break 'test;
-                    }
-
-                    println!("inbetween");
-
-                    if test2 {
-                        if test {
-                            break 'test;
-                        } else {
-                            println!("alternative");
-                        }
-                        break 'inner;
-                    }
-                    break 'outer;
-                } // end 'test
-
-                println!("after");
-                break 'inner;
-
-            } // end 'inner
-
-            println!("together!");
-            break 'outer;
-
-        } // end 'outer
-
-        println!("end");
-    }
-
-*/
-
 
 #[proc_macro_attribute]
 pub fn rewrite_forward_goto(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -107,14 +21,21 @@ pub fn rewrite_forward_goto(_attr: proc_macro::TokenStream, item: proc_macro::To
     let mut collector = Collector::new();
     traverse_boxed_block(&mut input.block, &mut collector);
 
-    let result = proc_macro::TokenStream::from(quote!(#input));
+    let result = proc_macro::TokenStream::from(quote!(
+        #[allow(unreachable_code)]
+        #input
+    ));
     println!("done");
     println!("{}", &result);
     result
 }
 
-fn traverse_boxed_block(boxed: &mut Box<syn::Block>, collector: &mut Collector) {
+fn traverse_boxed_block(boxed: &mut Box<Block>, collector: &mut Collector) {
     traverse_stmts(&mut boxed.stmts, collector)
+}
+
+fn traverse_block(block: &mut Block, collector: &mut Collector) {
+    traverse_stmts(&mut block.stmts, collector)
 }
 
 fn traverse_stmts(stmts: &mut Vec<Stmt>, collector: &mut Collector) {
@@ -169,6 +90,7 @@ fn traverse_stmts(stmts: &mut Vec<Stmt>, collector: &mut Collector) {
         if collector.should_push_continuation() {
             let continuation = stmts.split_off(i + 1);
             println!("push continuation {}", continuation.len());
+            assert!(continuation.last().iter().all(|c| !matches![c, Stmt::Expr(_)]), "Last expression needs to have semicolon");
             let target = collector.push_continuation(continuation);
             stmts.push(expr_to_stmt(new_break_expr(target)));
             println!("pushed continuation");
@@ -223,7 +145,7 @@ fn traverse_expr(expr: &mut Expr, collector: &mut Collector, is_statement: bool)
         },
         Expr::If(ExprIf { cond, then_branch, else_branch, .. }) => {
             traverse_boxed_expr(cond, &mut collector.cut());
-            traverse_stmts(&mut then_branch.stmts, collector);
+            traverse_block(then_branch, &mut collector.enter());
             if let Some((_, expr)) = else_branch {
                 println!("traverse else");
                 traverse_boxed_expr(expr, &mut collector.enter());
@@ -238,7 +160,15 @@ fn traverse_expr(expr: &mut Expr, collector: &mut Collector, is_statement: bool)
             None
         },
         Expr::Block(ExprBlock { block, ..}) => {
-            traverse_stmts(&mut block.stmts, collector);
+            traverse_block(block, &mut collector.enter());
+            None
+        },
+        Expr::Let(ExprLet { expr, .. }) => {
+            traverse_boxed_expr(expr, &mut collector.cut());
+            None
+        },
+        Expr::Loop(ExprLoop { body, .. }) => {
+            traverse_block(body, &mut collector.cut());
             None
         },
         _ => None,
@@ -266,11 +196,17 @@ fn new_break_expr(lifetime: Lifetime) -> Expr {
     })
 }
 
-fn new_loop_block(lifetime: Lifetime, body: Vec<Stmt>) -> Stmt {
-    let result = parse_quote!{
-        #lifetime: loop {
-            #(#body)*
-        };
-    };
-    result
+fn new_loop_block(label: Lifetime, body: Vec<Stmt>) -> Stmt {
+    expr_to_stmt(Expr::Loop(ExprLoop {
+        attrs: Vec::new(),
+        label: Some(Label {
+            name: label,
+            colon_token: Token![:](proc_macro2::Span::call_site()),
+        }),
+        loop_token: Token![loop](proc_macro2::Span::call_site()),
+        body: Block {
+            brace_token: token::Brace { span: proc_macro2::Span::call_site() },
+            stmts: body,
+        },
+    }))
 }

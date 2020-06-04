@@ -2,7 +2,6 @@ use forward_goto::*;
 
 
 #[rewrite_forward_goto]
-//#[allow(unreachable_code)]
 fn test_easy_method() -> Vec<&'static str>{
     let mut result = vec!["begin"];
 
@@ -467,6 +466,176 @@ fn test_multi_stack_like() {
             "begin",
             "after ifs",
             "in between labels",
+            "end",
+        ]
+    );
+}
+
+
+#[rewrite_forward_goto]
+fn test_if_merging_method(b: bool) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if b {
+        result.push("before first goto");
+        forward_goto!('test);
+    }
+
+    
+    {
+        result.push("before if");
+
+        if b {
+
+            forward_label!('test);
+
+            result.push("after test");
+        }
+
+        result.push("after if");
+    }
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_if_merging() {
+    assert_eq!(test_if_merging_method(true),
+        vec![
+            "begin",
+            "before first goto",
+            "after test",
+            "after if",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_if_merging_method(false),
+        vec![
+            "begin",
+            "before if",
+            "after if",
+            "end",
+        ]
+    );
+}
+
+
+
+#[rewrite_forward_goto]
+fn test_jump_in_continuation_method(b: bool) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if b {
+        result.push("before first goto");
+        forward_goto!('test);
+    }
+
+    
+    {
+        result.push("before if");
+
+        if b {
+            forward_label!('test);
+
+            result.push("after test");
+
+            forward_goto!('test_2);
+        }
+
+        result.push("after if");
+
+        forward_label!('test_2);
+
+        result.push("after test_2");
+    }
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_jump_in_continuation() {
+    assert_eq!(test_jump_in_continuation_method(true),
+        vec![
+            "begin",
+            "before first goto",
+            "after test",
+            "after test_2",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_in_continuation_method(false),
+        vec![
+            "begin",
+            "before if",
+            "after if",
+            "after test_2",
+            "end",
+        ]
+    );
+}
+
+
+#[rewrite_forward_goto]
+fn test_jump_into_match_method(three: Three) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    match three {
+        Three::A => {
+            forward_goto!('a);
+        },
+        Three::B => {
+            forward_goto!('b);
+        },
+        Three::C => {
+            forward_goto!('c);
+        }
+    };
+
+    match 1 as i32 {
+        1 => {
+            forward_label!('a);
+            result.push("a");
+        },
+        2 => {
+            forward_label!('b);
+            result.push("b");
+        },
+        _ => {
+            forward_label!('c);
+            result.push("c");
+        },
+    };
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_jump_into_match() {
+    assert_eq!(test_jump_into_match_method(Three::A),
+        vec![
+            "begin",
+            "a",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_into_match_method(Three::B),
+        vec![
+            "begin",
+            "b",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_into_match_method(Three::C),
+        vec![
+            "begin",
+            "c",
             "end",
         ]
     );

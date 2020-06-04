@@ -107,16 +107,26 @@ impl Collector {
     #[must_use]
     pub fn push_continuation(&mut self, continuation: Vec<Stmt>) -> Lifetime {
         assert!(!self.prev_conts.is_empty());
+        let incoming_label = self.prev_conts[0].clone();
+
+        if continuation.is_empty() && self.prev_conts.len() == 1 {
+            return incoming_label;
+        }
         
-        let lifetime = self.new_lifetime();
+        let newOutLabel = self.new_lifetime();
 
         let previous_continuations = std::mem::replace(
             &mut self.prev_conts,
-            vec![lifetime.clone()],
+            vec![newOutLabel.clone()],
         );
+        print!("{} -> ", &newOutLabel);
+        for p in previous_continuations.iter() {
+            print!("{}", p);
+        }
+        println!();
 
-        self.continuations.insert(lifetime.clone(), (continuation, previous_continuations));
-        lifetime
+        self.continuations.insert(newOutLabel, (continuation, previous_continuations));
+        incoming_label
     }
 
     #[must_use]
@@ -197,48 +207,6 @@ impl Collector {
         }
 
         Some((largest_index, end_label, result))
-
-        /*let to_generate = {
-            assert!(self.labels.is_empty());
-
-            let mut to_generate = Vec::new();
-            let mut visited = HashSet::new();
-
-            while let Some(Cont { label, index }) = queue.pop() {
-                if !visited.contains(&label) {
-                    visited.insert(label.clone());
-
-                    match &self.continuations.get(&label).and_then(|c| c.1.as_ref()) {
-                        Some(label) => queue.push(
-                            Cont {
-                                index,
-                                label: (*label).clone(),
-                            }
-                        ),
-                        None => (),
-                    }
-
-                    to_generate.push((index, label));
-                }
-            }
-
-            to_generate
-        };
-
-
-        let result_conts: Vec<_> = to_generate.into_iter().map(|(index, start)| {
-            let index = self.gotos.remove(&start).map(|g| g.1);
-            let (stmts, maybe_end) = match self.continuations.remove(&start) {
-                Some(t) => t,
-                None => (Vec::new(), None),
-            };
-            println!("take continuation: {}", stmts.len());
-
-            (index, start, stmts, maybe_end.unwrap_or(end_label.clone()))
-        }).collect();
-
-        Some((end_label, result_conts))*/
-        //todo!()
     }
 }
 
