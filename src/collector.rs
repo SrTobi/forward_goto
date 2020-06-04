@@ -140,14 +140,12 @@ impl Collector {
     }
 
     #[must_use]
-    pub fn retrieve_continuations(&mut self) -> Option<(usize, Lifetime, Vec<(usize, Vec<Lifetime>, Vec<Stmt>, Lifetime)>)> {
-        let labels_to_generate: Vec<Lifetime> = self.labels
+    pub fn retrieve_continuations(&mut self) -> Option<(usize, Lifetime, Vec<(Vec<Lifetime>, Vec<Stmt>, Lifetime)>)> {
+        let found_gotos_to_all_labels = self.labels
             .iter()
-            .filter(|l| self.gotos.get(&l).iter().any(|(lvl, _)| *lvl == self.level))
-            .cloned()
-            .collect();
+            .all(|l| self.gotos.get(&l).iter().any(|(lvl, _)| *lvl == self.level));
 
-        if labels_to_generate.is_empty() {
+        if !found_gotos_to_all_labels || self.labels.is_empty() {
             return None
         }
 
@@ -156,8 +154,7 @@ impl Collector {
         let mut largest_index = 0;
         let mut smallest_index = usize::MAX;
 
-        for label in labels_to_generate {
-            self.labels.remove(&label);
+        for label in self.labels.drain() {
             let (_, index) = self.gotos.remove(&label).expect("'label' should be in self.goto");
             gotos_to_generate.insert(label, index);
             largest_index = max(largest_index, index);
@@ -180,43 +177,35 @@ impl Collector {
         
         let continuations = &self.continuations;
         let rec = fix_fn!(
-            |rec, cur: &Lifetime, index: usize, result: &mut Vec<(usize, Lifetime)>| -> bool {
-                //let index = *gotos_to_generate.get(cur).unwrap_or(&index);
+            |rec, cur: &Lifetime, result: &mut Vec<Lifetime>| -> () {
                 match continuations.get(cur) {
                     Some((_, prevs)) => {
-                        let mut found_unrelated_label = false;
                         for p in prevs {
-                             found_unrelated_label |= rec(p, index, result);
+                             rec(p, result);
                         }
 
-                        if !found_unrelated_label {
-                            result.push((index, cur.clone()));
-                        }
-
-                        found_unrelated_label
+                        result.push(cur.clone());
                     },
-                    None => {
-                        false
-                    }
+                    None => ()
                 }
             }
         );
 
         let sorted_conts_to_generate = {
             let mut conts_to_generate = Vec::new();
-            rec(&end_label, smallest_index, &mut conts_to_generate);
-            conts_to_generate.sort_by_key(|e| usize::MAX - e.0);
+            rec(&end_label, &mut conts_to_generate);
+            //conts_to_generate.sort_by_key(|e| usize::MAX - e.0);
             conts_to_generate
         };
 
         let mut result = Vec::new();
 
-        for (index, label) in sorted_conts_to_generate {
+        for label in sorted_conts_to_generate {
             let (stmts, prevs) = self.continuations.remove(&label).unwrap();
-            result.push((index, prevs, stmts, label));
+            result.push((prevs, stmts, label));
         }
 
-        Some((largest_index, end_label, result))
+        Some((smallest_index, end_label, result))
     }
 
     pub fn check(mut self) -> Result<()> {
@@ -233,9 +222,9 @@ impl Collector {
         let mut errors = std::mem::replace(&mut self.errors, Vec::new());
         errors.sort_by_key(|(_, p)| *p);
 
-        for ((_, e), _) in errors.iter() {
+        /*for ((_, e), _) in errors.iter() {
             eprintln!("Err: {}", e);
-        }
+        }*/
 
         errors.first().map_or(Ok(()), |(info, _)| Err(info.clone()))
     }

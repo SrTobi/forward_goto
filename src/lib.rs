@@ -42,7 +42,7 @@ pub fn rewrite_forward_goto(_attr: proc_macro::TokenStream, item: proc_macro::To
     };
 
     //eprintln!("done");
-    eprintln!("{}", &output);
+    //eprintln!("{}", &output);
     output
 }
 
@@ -72,17 +72,9 @@ fn traverse_stmts(stmts: &mut Vec<Stmt>, collector: &mut Collector) -> Result<()
             let mut inner = stmts.split_off(start_index);
             inner.push(new_break_stmt(end_label.clone()));
 
-            for (start_index, incomings, continuation, outgoing) in continuations {
+            for (incomings, continuation, outgoing) in continuations {
                 inner = {
-                    let mut inside_stmts = if i == start_index {
-                        inner
-                    } else {
-                        debug_assert!(start_index < i);
-                        i = start_index;
-                        let mut inside_stmts = stmts.split_off(start_index);
-                        inside_stmts.extend(inner.into_iter());
-                        inside_stmts
-                    };
+                    let mut inside_stmts = inner;
 
                     if let Some(last) = incomings.last().cloned() {
                         for incoming in incomings.into_iter() {
