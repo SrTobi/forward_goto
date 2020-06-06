@@ -8,7 +8,7 @@ checksum = "380f193e13417258cee0f6f750a1be449bfaa476874985fd6690be580086f7f1"
 
 [[package]]
 name = "forward_goto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fix_fn",
  "proc-macro2",

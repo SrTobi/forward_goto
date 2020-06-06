@@ -1,6 +1,6 @@
 [package]
 name = "forward_goto"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["SrTobi <code.databyte@gmail.com>"]
 edition = "2018"
 license = "MIT"
