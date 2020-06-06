@@ -817,3 +817,55 @@ fn test_side_jump() {
     );
 }
 
+
+
+#[rewrite_forward_goto]
+fn test_jump_into_continuation_method(b: bool) -> Vec<&'static str>{
+    let mut result = vec!["begin"];
+
+    if b {
+        forward_goto!('test_1);
+    }
+
+    result.push("after if");
+
+    forward_goto!('test_2);
+
+    {
+        result.push("not executed");
+    
+        forward_label!('test_1);
+        
+        result.push("after test_1");
+
+        forward_label!('test_2);
+
+        result.push("after test_2");
+    }
+
+    result.push("end");
+    result
+}
+
+#[test]
+fn test_jump_into_continuation() {
+    assert_eq!(test_jump_into_continuation_method(true),
+        vec![
+            "begin",
+            "after test_1",
+            "after test_2",
+            "end",
+        ]
+    );
+
+    assert_eq!(test_jump_into_continuation_method(false),
+        vec![
+            "begin",
+            "after if",
+            "after test_2",
+            "end",
+        ]
+    );
+}
+
+

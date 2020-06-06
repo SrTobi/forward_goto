@@ -203,7 +203,17 @@ impl Collector {
         let mut result = Vec::new();
 
         for label in sorted_conts_to_generate {
-            let (stmts, prevs) = self.continuations.remove(&label).unwrap();
+            let (mut stmts, prevs) = self.continuations.remove(&label).unwrap();
+
+            // remove previous breaks
+            // needed to jump into continuations
+            let breaks_to_remove = stmts.iter().rev().take_while(|s| 
+                matches![s, Stmt::Semi(Expr::Break(ExprBreak { label: Some(_), .. }), _)]
+            ).count();
+            for _ in 0..breaks_to_remove {
+                stmts.pop();
+            }
+
             result.push((prevs, stmts, label));
         }
 

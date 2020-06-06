@@ -120,6 +120,11 @@ pub fn rewrite_forward_goto(_attr: proc_macro::TokenStream, item: proc_macro::To
             ))
         },
         Err((span, msg)) => {
+
+            //eprintln!("{}", proc_macro::TokenStream::from(quote!(
+            //    #input
+            //)));
+            
             let error = quote_spanned!(span=>
                 compile_error!(#msg)
             );
@@ -274,7 +279,7 @@ fn traverse_expr(expr: &mut Expr, collector: &mut Collector, _is_statement: bool
             None
         },
         Expr::Loop(ExprLoop { body, .. }) => {
-            traverse_block(body, &mut collector.cut())?;
+            traverse_block(body, &mut collector.enter())?;
             None
         },
         _ => None,
